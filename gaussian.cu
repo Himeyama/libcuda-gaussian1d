@@ -55,7 +55,7 @@ std::vector<T> gaussian1d(std::vector<T> src, T truncate, T sd) {
   cudaMemcpy(ggauss, gauss.data(), sizeof(T) * gauss.size(),
              cudaMemcpyHostToDevice);
 
-  cuda_gaussian1d<<<ceil(size / (float)THREADS_PER_BLOCK), THREADS_PER_BLOCK>>>(gdata, ggauss, gf,
+  cuda_gaussian1d<<<ceil(src.size() / (float)THREADS_PER_BLOCK), THREADS_PER_BLOCK>>>(gdata, ggauss, gf,
                                                      src.size(), gauss.size());
   cudaDeviceSynchronize();
   cudaMemcpy(f.data(), gf, sizeof(T) * f.size(), cudaMemcpyDeviceToHost);
