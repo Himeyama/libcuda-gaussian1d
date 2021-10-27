@@ -14,3 +14,6 @@ libgaussian1d.so: gaussian.cu
 test: test.cpp
 	$(NVCC) $(OPT) -lgaussian1d -L. -I. $^ -o $@
 
+install: libgaussian1d.so
+	install -s $^ $(libdir)
+	cp gaussian1d.hpp $(incdir)
