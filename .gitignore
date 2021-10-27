@@ -1,2 +1,2 @@
-/gaussian.so
-/test
+*.so
+test
