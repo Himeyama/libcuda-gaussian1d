@@ -2,6 +2,8 @@
 #include <numeric>
 #include <vector>
 
+#define THREADS_PER_BLOCK 512
+
 template <typename T>
 __global__ void cuda_gaussian1d(T *data, T *g, T *f, long src_size,
                                 long g_size) {
@@ -53,7 +55,7 @@ std::vector<T> gaussian1d(std::vector<T> src, T truncate, T sd) {
   cudaMemcpy(ggauss, gauss.data(), sizeof(T) * gauss.size(),
              cudaMemcpyHostToDevice);
 
-  cuda_gaussian1d<<<(src.size() + 256) / 256, 256>>>(gdata, ggauss, gf,
+  cuda_gaussian1d<<<ceil(size / (float)THREADS_PER_BLOCK), THREADS_PER_BLOCK>>>(gdata, ggauss, gf,
                                                      src.size(), gauss.size());
   cudaDeviceSynchronize();
   cudaMemcpy(f.data(), gf, sizeof(T) * f.size(), cudaMemcpyDeviceToHost);
