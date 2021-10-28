@@ -8,6 +8,7 @@ template <typename T>
 __global__ void cuda_gaussian1d(T *data, T *g, T *f, long src_size,
                                 long g_size) {
   long i = blockDim.x * blockIdx.x + threadIdx.x;
+
   if (i < src_size) {
     f[i] = 0;
     for (long j = 0; j < g_size; j++)
@@ -16,23 +17,20 @@ __global__ void cuda_gaussian1d(T *data, T *g, T *f, long src_size,
 }
 
 template <typename T>
-__global__ void cuda_gaussian1d_multi(T a
-  // T *data, T *g, T *f, long src_size,
-                                      // long src_col_size, long data_col_size,
-                                      // long g_size
-                                      ) {
-  long i = blockDim.x * blockIdx.x + threadIdx.x;
-  long j = blockDim.y * blockIdx.y + threadIdx.y;
+__global__ void cuda_gaussian1d_multi(T *data, T *g, T *f, long src_size,
+                                      long src_col_size, long data_col_size,
+                                      long g_size) {
+  long j = blockDim.x * blockIdx.x + threadIdx.x;
+  long i = blockDim.y * blockIdx.y + threadIdx.y;
 
-  printf("%ld, %ld\n", i, j);
-
-  // if (i < src_size) {
-  //   if (j < src_col_size) {
-  //     f[i * src_col_size + j] = 0;
-  //     for (long k = 0; k < g_size; k++)
-  //       f[i * src_col_size + j] += data[i * data_col_size + j + k] * g[k];
-  //   }
-  // }
+  if (i < src_size) {
+    if (j < src_col_size) {
+      f[src_col_size * i + j] = 0;
+      for (long k = 0; k < g_size; k++) {
+        f[src_col_size * i + j] += data[data_col_size * i + j + k] * g[k];
+      }
+    }
+  }
 }
 
 long reflect_idx(long size, long i) {
@@ -65,47 +63,55 @@ std::vector<T> complement_data(std::vector<T> src, long r) {
   return data;
 }
 
+void set_block_thread(dim3 *grid, dim3 *block, long x_size, long y_size) {
+  cudaDeviceProp deviceProp;
+  cudaGetDeviceProperties(&deviceProp, 0);
+  int threads_per_block = deviceProp.maxThreadsPerBlock;
+  block->y = 2;
+  block->x = threads_per_block / block->y;
+  grid->y = ceil(y_size / (float)block->y);
+  grid->x = ceil(x_size / (float)block->x);
+}
+
 template <typename T>
 std::vector<std::vector<T>> gaussian1d_multi(std::vector<std::vector<T>> src,
                                              T truncate, T sd) {
-  long r = (long)(truncate * sd * 0.5);
+  long r = (long)(truncate * sd + 0.5);
 
-  std::vector<std::vector<T>> data(src.size(),
-                                   std::vector<T>(src[0].size() + 2 * r));
-  for (long n = 0; n < src.size(); n++) {
+  long row_size = src.size();
+  long column_size = src[0].size();
+  long data_column_size = column_size + 2 * r;
+
+  std::vector<std::vector<T>> data(row_size, std::vector<T>(data_column_size));
+
+  for (long n = 0; n < row_size; n++)
     data[n] = complement_data(src[n], r);
-  }
 
   // Gaussian distribution
   std::vector<T> gauss = gaussian_kernel(r, sd);
 
   // Filtered data
-  std::vector<std::vector<T>> f(src.size(), std::vector<T>(src[0].size()));
+  std::vector<std::vector<T>> f(row_size, std::vector<T>(column_size));
   T *gdata, *ggauss, *gf;
-  cudaMalloc((void **)&gdata, sizeof(T) * data.size() * src[0].size());
+  cudaMalloc((void **)&gdata, sizeof(T) * row_size * data_column_size);
   cudaMalloc((void **)&ggauss, sizeof(T) * gauss.size());
-  cudaMalloc((void **)&gf, sizeof(T) * f.size() * src[0].size());
-  cudaMemcpy(gdata, data.data(), sizeof(T) * data.size() * src[0].size(),
-             cudaMemcpyHostToDevice);
+  cudaMalloc((void **)&gf, sizeof(T) * f.size() * column_size);
   cudaMemcpy(ggauss, gauss.data(), sizeof(T) * gauss.size(),
              cudaMemcpyHostToDevice);
+  for (int i = 0; i < row_size; i++)
+    cudaMemcpy(gdata + data_column_size * i, data[i].data(),
+               sizeof(T) * data_column_size, cudaMemcpyHostToDevice);
 
-  // dim3 block(THREADS_PER_BLOCK, THREADS_PER_BLOCK);
-  // dim3 grid(ceil(src.size() / (float)THREADS_PER_BLOCK),
-  //           ceil(src[0].size() / (float)THREADS_PER_BLOCK));
-  cuda_gaussian1d_multi<<<dim3(2, 2), dim3(1, 32)>>>(0.1
-    // gdata, ggauss, gf, src.size(),
-    //                                      src[0].size(), data[0].size(),
-    //                                      gauss.size()
-                                         );
+  dim3 grid, block;
+  set_block_thread(&grid, &block, column_size, row_size);
+
+  cuda_gaussian1d_multi<<<grid, block>>>(
+      gdata, ggauss, gf, row_size, column_size, data_column_size, gauss.size());
   cudaDeviceSynchronize();
-  T *filtered = (T *)malloc(sizeof(T) * f.size() * f[0].size());
-  cudaMemcpy(filtered, gf, sizeof(T) * f.size() * f[0].size(),
-             cudaMemcpyDeviceToHost);
 
-  for (int i = 0; i < f.size(); i++)
-    memcpy(f[i].data(), filtered + f[0].size() * i, sizeof(T) * f[0].size());
-  free(filtered);
+  for (int i = 0; i < row_size; i++)
+    cudaMemcpy(f[i].data(), gf + column_size * i, sizeof(T) * column_size,
+               cudaMemcpyDeviceToHost);
 
   cudaFree(gdata);
   cudaFree(ggauss);
@@ -118,6 +124,7 @@ std::vector<std::vector<T>> gaussian1d_multi(std::vector<std::vector<T>> src,
 template <typename T>
 std::vector<T> gaussian1d(std::vector<T> src, T truncate, T sd) {
   long r = (long)(truncate * sd + 0.5);
+
   std::vector<T> data = complement_data(src, r);
 
   // Gaussian distribution
